@@ -61,7 +61,7 @@ class WinASIO2Source {
 	uint64_t timestampBuffer[480];
 	uint32_t timestampBufferIndex;
 
-	pthread_mutex_t asio_buf_mutex;
+	CRITICAL_SECTION bufferSection;
 
 	uint32_t obsSampleRate = 0;
 	speaker_layout obsSpeakers = SPEAKERS_MONO;
@@ -134,12 +134,12 @@ WinASIO2Source::WinASIO2Source(obs_data_t *settings, obs_source_t *source) {
 	receiveSignal = CreateEvent(nullptr, false, false, nullptr);
 	UpdateSettings(settings);
 
-	pthread_mutex_init_value(&asio_buf_mutex);
+	InitializeCriticalSection(&bufferSection);
 }
 
 inline WinASIO2Source::~WinASIO2Source() {
 	if (isASIOActive) asioSourceStop();
-	pthread_mutex_destroy(&asio_buf_mutex);
+	DeleteCriticalSection(&bufferSection);
 }
 
 inline void WinASIO2Source::asioSourceStart() {
@@ -256,7 +256,7 @@ ASIOTime * WinASIO2Source::bufferSwitchTimeInfo(ASIOTime *timeInfo, long index, 
 
 	uint64_t timestampAtCallback = asioSource->useDeviceTiming ? 0 : os_gettime_ns();
 
-	pthread_mutex_lock(&asioSource->asio_buf_mutex);
+	EnterCriticalSection(&asioSource->bufferSection);
 
 	asioSource->timestampBuffer[asioSource->timestampBufferIndex] = asioSource->useDeviceTiming ?
 		ASIO64toUint64(timeInfo->timeInfo.systemTime) :
@@ -273,7 +273,7 @@ ASIOTime * WinASIO2Source::bufferSwitchTimeInfo(ASIOTime *timeInfo, long index, 
 	asioSource->writeSampleIndex += asioSource->asioBufferSampleCount;
 	if (asioSource->writeSampleIndex >= asioSource->alignmentBufferSampleCount) asioSource->writeSampleIndex = 0;
 
-	pthread_mutex_unlock(&asioSource->asio_buf_mutex);
+	LeaveCriticalSection(&asioSource->bufferSection);
 
     SetEvent(asioSource->receiveSignal);
 
@@ -299,7 +299,7 @@ bool WinASIO2Source::ReadCapturedData() {
 	data.samples_per_sec = obsSampleRate;
 	data.format = AUDIO_FORMAT_FLOAT;
 
-	pthread_mutex_lock(&asio_buf_mutex);
+	EnterCriticalSection(&bufferSection);
 
 	while (readSampleIndex + obsSamplesPer10ms <= writeSampleIndex || (writeSampleIndex == 0 && readSampleIndex > 0)) {
 		data.data[0] = (const uint8_t*)(alignmentBuffer + readSampleIndex);
@@ -311,7 +311,7 @@ bool WinASIO2Source::ReadCapturedData() {
 		if (readSampleIndex >= alignmentBufferSampleCount) readSampleIndex = 0;
 	}
 
-	pthread_mutex_unlock(&asio_buf_mutex);
+	LeaveCriticalSection(&bufferSection);
 
 	return true;
 }
